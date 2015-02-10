@@ -52,3 +52,7 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# My test data - help ensure I don't add it accidentally to my public repo.
+testdata/
+
