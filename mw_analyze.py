@@ -114,9 +114,9 @@ class Transaction:
         if self.transfer_sibling != None:
             xfer = ' (transfer partner %d)' % (self.transfer_sibling)
 
-        return '[%d] %s: %.2f %s (%s) [acct %d] [bkt %s]%s' % \
+        return '[%d] %s: %.2f %s (%s) [acct %s] [bkt %s]%s' % \
             (self.key, self.date.isoformat(), self.amount,
-             self.payee, self.memo, bucket, xfer )
+             self.payee, self.memo, self.account, bucket, xfer )
 
 # This class represents a "money flow", which is a transfer of funds
 # between buckets.  Note that this is one half of a money flow, they
