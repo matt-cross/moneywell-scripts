@@ -14,7 +14,7 @@
 # transactions that look like they could cause the imbalance.
 # Transactions that it looks for include:
 #
-## Transactions with buckets assign in an account that is excluded
+## Transactions with buckets assigned in an account that is excluded
 ## from bucket balances.
 #
 ## Transactions without buckets assigned in accounts that are included
@@ -236,6 +236,10 @@ class BasicInfo:
     def bucketed_accounts(self):
         return [account for account in self.accounts.keys() if self.is_account_bucketed(account)]
 
+    # Return a list of the primary keys of all unbucketed accounts
+    def unbucketed_accounts(self):
+        return [account for account in self.accounts.keys() if not self.is_account_bucketed(account)]
+
     # Returns the balance of the account at the end of the specified
     # date (or as of all transactions in the register if date was not
     # specified).  'account' is the account's primary key (a small
@@ -279,11 +283,11 @@ class BasicInfo:
         # Next, calculate the sum of all transactions that are
         # assigned to this bucket.  Note that we can only consider
         # transactions that are on or after the cash flow start date.
-        my_txns = txns_between_dates(txns_in_bucket(self.transactions, bucket), self.cash_flow_start, date)
+        my_txns = txns_between_dates(txns_in_bucket(self.transactions, bucket), self.cash_flow_start + datetime.timedelta(days=1), date)
         txn_balance = txn_amount_sum(my_txns)
 
         # Finally, calculate the sum of all money flows that affect this bucket:
-        my_flows = flows_between_dates(flows_in_bucket(self.money_flows, bucket), self.cash_flow_start, date)
+        my_flows = flows_between_dates(flows_in_bucket(self.money_flows, bucket), self.cash_flow_start + datetime.timedelta(days=1), date)
         flow_balance = flow_amount_sum(my_flows)
 
         return round(starting_balance + txn_balance + flow_balance, 2);
@@ -357,8 +361,15 @@ class BasicInfo:
             return False # Not a transfer or missing sibling
 
         sibling = self.transactions[txn.transfer_sibling]
-        return is_account_bucketed(sibling.account)
+        return self.is_account_bucketed(sibling.account)
 
+
+    # Given a transaction return its transfer sibling.
+    def get_xfer_sibling(self, txn):
+        if txn.transfer_sibling not in self.transactions:
+            return None
+
+        return self.transactions[txn.transfer_sibling]
 
     # The following methods are designed to catch entry errors that
     # would lead to the sum of bucket balances not equaling account
@@ -379,7 +390,7 @@ class BasicInfo:
         for account in self.bucketed_accounts():
             # Start with a list of all transactions in this account starting on the cash flow start date
             txns = txns_in_account(self.transactions, account)
-            txns = txns_between_dates(txns, self.cash_flow_start, datetime.date.max)
+            txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
 
             # Exclude any split parent transactions
             txns = [txn for txn in txns if not self.is_txn_split(txn)]
@@ -400,7 +411,7 @@ class BasicInfo:
                 error_this_account = txn_amount_sum(txns)
                 error_sum += error_this_account
                 print '  ***'
-                print '  *** Bucketed account %d (%s) has %d transactions without buckets totalling %.2f:' % \
+                print '  *** Bucketed account %d (%s) has %d transaction(s) without buckets totalling %.2f:' % \
                     (account, self.accounts[account].name, len(txns), error_this_account)
                 for txn in txns:
                     print '  *** %s' % (txn)
@@ -408,6 +419,8 @@ class BasicInfo:
 
         if error_sum:
             print '  *** Sum of unbucketed transactions in bucketed accounts: %.2f' % (error_sum)
+        else:
+            print '  No issues found.'
 
         return error_sum
 
@@ -416,13 +429,11 @@ class BasicInfo:
     def check_for_bucketed_txns_in_unbucketed_accounts(self):
         error_sum = 0.0
 
-        for account in self.accounts.keys():
-            if self.is_account_bucketed(account):
-                continue
+        for account in self.unbucketed_accounts():
 
             # Start with a list of all transactions in this account starting on the cash flow start date
             txns = txns_in_account(self.transactions, account)
-            txns = txns_between_dates(txns, self.cash_flow_start, datetime.date.max)
+            txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
 
             # Exclude any split parent transactions
             txns = [txn for txn in txns if not self.is_txn_split(txn)]
@@ -443,7 +454,7 @@ class BasicInfo:
                 error_this_account = txn_amount_sum(txns)
                 error_sum += error_this_account
                 print '  ***'
-                print '  *** Unbucketed account %d (%s) has %d transactions with buckets totalling %.2f:' % \
+                print '  *** Unbucketed account %d (%s) has %d transaction(s) with buckets totalling %.2f:' % \
                     (account, self.accounts[account].name, len(txns), error_this_account)
                 for txn in txns:
                     print '  *** %s' % (txn)
@@ -453,7 +464,9 @@ class BasicInfo:
         error_sum = -error_sum
 
         if error_sum:
-            print '  *** Sum of unbucketed transactions in bucketed accounts: %.2f' % (error_sum)
+            print '  *** Sum of bucketed transactions in unbucketed accounts: %.2f' % (error_sum)
+        else:
+            print '  No issues found.'
 
         return error_sum
 
@@ -481,21 +494,124 @@ class BasicInfo:
                 print '  ***'
                 error_count += 1
                 error_sum += error
-                if self.is_account_bucketed(parent.account):
+                if self.is_account_bucketed(parent.account) and parent.date > self.cash_flow_start:
                     error_sum_bucketed += error
 
         if error_count:
-            print '  *** Found %d split transactions with errors' % (error_count)
+            print '  *** Found %d split transaction(s) with errors' % (error_count)
         if error_sum:
             print '  *** Total of errors: %.2f' % (error_sum)
         if error_sum_bucketed:
             print '  *** Total of errors in bucketed accounts: %.2f' % (error_sum_bucketed)
+
+        if error_count == 0:
+            print '  No issues found.'
 
         # We return the error only as it applies to bucketed accounts.
         # Any unsplit portion in an unbucketed account does not affect
         # bucket/account mismatches.
 
         return error_sum_bucketed
+
+    # Check that transfers between bucketed accounts have no buckets
+    # assigned, and that transfers between bucketed and unbucketed
+    # accounts have buckets on the bucketed side.
+    def check_bucketed_account_transfers(self):
+        error_sum = 0.0
+
+        for account in self.bucketed_accounts():
+            # Get a list of all transfers in this account (after the cash flow start date)
+            txns = txns_in_account(self.transactions, account)
+            txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+            xfers = [txn for txn in txns if txn.transfer_sibling]
+
+            # Split them into the ones going to bucketed and unbucketed accounts
+            xfers_to_bucketed = [txn for txn in xfers if self.is_txn_xfer_sibling_bucketed(txn)]
+            xfers_to_unbucketed = [txn for txn in xfers if not self.is_txn_xfer_sibling_bucketed(txn)]
+
+            # Get a list of all transfers to bucketed accounts that have buckets assigned (they shouldn't):
+            xfers_to_bucketed = [txn for txn in xfers_to_bucketed if txn.bucket]
+            xfers_to_bucketed.sort(key = Transaction.get_date)
+
+            # Get a list of all transfers to unbucketed accounts that don't have buckets assigned (they should):
+            xfers_to_unbucketed = [txn for txn in xfers_to_unbucketed if not txn.bucket]
+            xfers_to_unbucketed.sort(key = Transaction.get_date)
+
+            if xfers_to_bucketed:
+                error_this_time = txn_amount_sum(xfers_to_bucketed)
+                error_sum += error_this_time
+                print '  ***'
+                print '  *** Bucketed account %d (%s) has %d transfer(s) to another bucketed account with buckets assigned totalling %.2f:' % \
+                    (account, self.accounts[account].name, len(xfers_to_bucketed), error_this_time)
+                for txn in xfers_to_bucketed:
+                    print '  *** %s' % (txn)
+                    sibling = self.get_xfer_sibling(txn)
+                    if sibling:
+                        print '  ***** ^-> %s' % (sibling)
+                        print '  *****'
+                print '  ***'
+
+            if xfers_to_unbucketed:
+                error_this_time = txn_amount_sum(xfers_to_unbucketed)
+                error_sum += error_this_time
+                print '  ***'
+                print '  *** Bucketed account %d (%s) has %d transfer(s) to unbucketed accounts without buckets assigned totalling %.2f:' % \
+                    (account, self.accounts[account].name, len(xfers_to_unbucketed), error_this_time)
+                for txn in xfers_to_unbucketed:
+                    print '  *** %s' % (txn)
+                    sibling = self.get_xfer_sibling(txn)
+                    if sibling:
+                        print '  ***** ^-> %s' % (sibling)
+                        print '  *****'
+                print '  ***'
+
+        if error_sum:
+            print '  *** Sum of incorrect bucketed transfers in bucketed accounts: %.2f' % (error_sum)
+        else:
+            print '  No issues found.'
+
+        return error_sum
+
+    # Check that transfers in unbucketed accounts have no buckets
+    # assigned - this is true whether the other side is a bucketed or
+    # unbucketed account.
+    def check_unbucketed_account_transfers(self):
+        error_sum = 0.0
+
+        for account in self.unbucketed_accounts():
+
+            # Get a list of all transfers in this account (after the cash flow start date)
+            txns = txns_in_account(self.transactions, account)
+            txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+            xfers = [txn for txn in txns if txn.transfer_sibling]
+
+            # Get a list of all transfers that have buckets assigned (they shouldn't):
+            xfers = [txn for txn in xfers if txn.bucket]
+            xfers.sort(key = Transaction.get_date)
+
+            if xfers:
+                error_this_time = txn_amount_sum(xfers)
+                error_sum += error_this_time
+                print '  ***'
+                print '  *** Unbucketed account %d (%s) has %d transfer(s) with buckets assigned totalling %.2f:' % \
+                    (account, self.accounts[account].name, len(xfers), error_this_time)
+                for txn in xfers:
+                    print '  *** %s' % (txn)
+                    sibling = self.get_xfer_sibling(txn)
+                    if sibling:
+                        print '  ***** ^-> %s' % (sibling)
+                        print '  *****'
+                print '  ***'
+
+        # See the note above about the sign of the error reported by these methods.
+        error_sum = -error_sum
+
+        if error_sum:
+            print '  *** Sum of bucketed transfers in unbucketed accounts: %.2f' % (error_sum)
+        else:
+            print '  No issues found.'
+
+        return error_sum
 
 # Class to interface to a MoneyWell data file.  Provides methods for
 # reading information from the data file.
@@ -661,23 +777,36 @@ def read_in_basic_info(filename):
 if __name__ == '__main__':
     info = read_in_basic_info('testdata/matt_play_copy.moneywell')
 
-    verbose = 0
+    verbose = 1
 
     if verbose:
         print ''
         print 'Accounts:'
+        max_account_name_length = max([len(account.name) for account in info.accounts.values()])
         for acct in info.accounts.values():
-            print acct
+            if acct.bucketed:
+                bucketed_str = ' (bucketed)'
+            else:
+                bucketed_str = ''
+            print '  %2d: %-*s%s' % (acct.key, max_account_name_length, acct.name, bucketed_str)
 
         print ''
         print 'Buckets:'
         for bucket in info.buckets.values():
-            print bucket
+            if bucket.hidden:
+                print '  %2d: (%s)' % (bucket.key, bucket.name)
+            else:
+                print '  %2d: %s' % (bucket.key, bucket.name)
 
         print ''
         print 'Starting bucket balances:'
+        max_bucket_name_length = max([len(bucket.name) for bucket in info.buckets.values()])
         for bucket in info.starting_bucket_balances.keys():
-            print 'bucket %d: %.2f' % (bucket, info.starting_bucket_balances[bucket])
+            if info.starting_bucket_balances[bucket]:
+                if info.buckets[bucket].hidden:
+                    print '  %2d: (%*s) %10.2f' % (bucket, max_bucket_name_length, info.buckets[bucket].name, info.starting_bucket_balances[bucket])
+                else:
+                    print '  %2d:  %*s: %10.2f' % (bucket, max_bucket_name_length, info.buckets[bucket].name, info.starting_bucket_balances[bucket])
 
     print ''
     print 'Cash flow start date: %s' % (info.cash_flow_start.isoformat())
@@ -688,29 +817,48 @@ if __name__ == '__main__':
     print ''
     print 'Found %d money flows' % (len(info.money_flows))
 
-    # In our moneywell data file, it turns out that we have two
-    # accounts as bucketed now, but on the "cash flow start date",
-    # only one account was considered bucketed at that time.  The data
-    # file does not contain this information.
-    cash_flow_start_account_names = ['Main Checking']
-    cash_flow_start_accounts = map(info.account_id_from_name, cash_flow_start_account_names)
+    if False:
+        # In our moneywell data file, it turns out that we have two
+        # accounts as bucketed now, but on the "cash flow start date",
+        # only one account was considered bucketed at that time.  The
+        # data file does not contain this information.
+        cash_flow_start_account_names = ['Main Checking']
+        cash_flow_start_accounts = map(info.account_id_from_name, cash_flow_start_account_names)
+    else:
+        cash_flow_start_accounts = info.bucketed_accounts()
 
     print ''
+    print 'Checking cash flow start:'
     info.check_cash_flow_start(cash_flow_start_accounts)
 
     print ''
+    print 'Checking bucket balances against bucketed account balances:'
     info.check_bucket_balances()
 
     error_sum = 0.0
 
     print ''
+    print 'Checking for bucketed transactions in unbucketed accounts:'
     error_sum += info.check_for_bucketed_txns_in_unbucketed_accounts()
 
     print ''
+    print 'Checking for unbucketed transactions in bucketed accounts:'
     error_sum += info.check_for_unbucketed_txns_in_bucketed_accounts()
 
     print ''
+    print 'Checking split transactions for consistency:'
     error_sum += info.check_splits();
+
+    print ''
+    print 'Checking transfers in bucketed accounts:'
+    error_sum += info.check_bucketed_account_transfers()
+
+    print ''
+    print 'Checking transfers in unbucketed accounts:'
+    error_sum += info.check_unbucketed_account_transfers()
+
+    print ''
+    print 'Done.'
 
     if error_sum:
         print ''
