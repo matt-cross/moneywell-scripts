@@ -788,25 +788,29 @@ if __name__ == '__main__':
                 bucketed_str = ' (bucketed)'
             else:
                 bucketed_str = ''
-            print '  %2d: %-*s%s' % (acct.key, max_account_name_length, acct.name, bucketed_str)
+            print '  %2d: %-*s %10.2f%s' % (acct.key, max_account_name_length, acct.name, info.account_balance(acct.key), bucketed_str)
 
         print ''
         print 'Buckets:'
-        for bucket in info.buckets.values():
+        max_bucket_name_length = max([len(bucket.name) for bucket in info.buckets.values()])
+        buckets = info.buckets.values()
+        buckets.sort(key = lambda bucket: (bucket.hidden, bucket.key))
+        for bucket in buckets:
             if bucket.hidden:
-                print '  %2d: (%s)' % (bucket.key, bucket.name)
+                bucket_name = '(%s)' % (bucket.name)
             else:
-                print '  %2d: %s' % (bucket.key, bucket.name)
+                bucket_name = bucket.name
+            print '  %2d: %-*s %10.2f' % (bucket.key, max_bucket_name_length+2, bucket_name, info.bucket_balance(bucket.key))
 
         print ''
         print 'Starting bucket balances:'
-        max_bucket_name_length = max([len(bucket.name) for bucket in info.buckets.values()])
         for bucket in info.starting_bucket_balances.keys():
             if info.starting_bucket_balances[bucket]:
                 if info.buckets[bucket].hidden:
-                    print '  %2d: (%*s) %10.2f' % (bucket, max_bucket_name_length, info.buckets[bucket].name, info.starting_bucket_balances[bucket])
+                    bucket_name = '(%s)' % (info.buckets[bucket].name)
                 else:
-                    print '  %2d:  %*s: %10.2f' % (bucket, max_bucket_name_length, info.buckets[bucket].name, info.starting_bucket_balances[bucket])
+                    bucket_name = info.buckets[bucket].name
+                print '  %2d:  %-*s: %10.2f' % (bucket, max_bucket_name_length, bucket_name, info.starting_bucket_balances[bucket])
 
     print ''
     print 'Cash flow start date: %s' % (info.cash_flow_start.isoformat())
