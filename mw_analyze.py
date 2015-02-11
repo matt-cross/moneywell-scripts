@@ -60,30 +60,6 @@ class Bucket:
             ishidden = ' (hidden)'
         return 'bucket %d: %s%s' % (self.key, self.name, ishidden)
 
-# Converts a date in YYYYMMDD format to a datetime.date object
-def date_from_ymd(ymd):
-    y = ymd / 10000
-    m = (ymd / 100) % 100
-    d = ymd % 100
-
-    try:
-        date = datetime.date(y, m, d)
-    except:
-        print 'Error converting ymd %d to a date' % (ymd)
-        raise
-
-    return date
-
-# Describes a data file.  Contains a list of accounts, a list of
-# buckets, the cash flow start date (as a datetime.date object), and a
-# list of initial bucket balances.
-class BasicInfo:
-    def __init__(self, accounts, buckets, cash_flow_start, starting_bucket_balances):
-        self.accounts = accounts
-        self.buckets = buckets
-        self.cash_flow_start = cash_flow_start
-        self.starting_bucket_balances = starting_bucket_balances
-
 # A class to represent a MoneyWell transaction.  This is a real
 # transaction on an account, as opposed to a "money flow" or "bucket
 # transfer" that just moves money between buckets.
@@ -134,6 +110,204 @@ class MoneyFlow:
         return '[%d] %s: %.2f %s [bkt %d] (xfer partner %d)' % \
             (self.key, self.date.isoformat(), self.amount, self.memo,
              self.bucket, self.transfer_sibling )
+
+# Converts a date in YYYYMMDD format to a datetime.date object
+def date_from_ymd(ymd):
+    y = ymd / 10000
+    m = (ymd / 100) % 100
+    d = ymd % 100
+
+    try:
+        date = datetime.date(y, m, d)
+    except:
+        print 'Error converting ymd %d to a date' % (ymd)
+        raise
+
+    return date
+
+#
+# Utility functions for dealing with lists of transactions and flows.
+# Transactions are stored by default in BasicInfo as a dictionary so
+# that we can find them by transaction ID, but these filters all
+# return a list of transactions.  They can take either a dictionary or
+# list of transactions.
+#
+
+# Filter out the split children transactions - they are not useful for computing the balance of an account.
+def proper_txns(txns):
+    if isinstance(txns, dict):
+        txns = txns.values()
+    return [txn for txn in txns if txn.split_parent is None]
+
+# Return a list of transactions that are for the specified account
+def txns_in_account(txns, account):
+    if isinstance(txns, dict):
+        txns = txns.values()
+    return [txn for txn in txns if txn.account == account]
+
+# Return a list of transactions that are assigned to the specified bucket
+def txns_in_bucket(txns, bucket):
+    if isinstance(txns, dict):
+        txns = txns.values()
+    return [txn for txn in txns if txn.bucket == bucket]
+
+# Returns transactions that are on the start date, end date, and every date in between
+def txns_between_dates(txns, datestart, dateend):
+    if isinstance(txns, dict):
+        txns = txns.values()
+    return [txn for txn in txns if txn.date >= datestart and txn.date <= dateend]
+
+# Returns a list of transactions that are on or before the specified date
+def txns_at_or_before_date(txns, date):
+    return txns_between_dates(txns, datetime.date.min, date)
+
+# Returns a sum of the amount of all transactions in the list/dictionary:
+def txn_amount_sum(txns):
+    if isinstance(txns, dict):
+        txns = txns.values()
+    return round(sum(map(lambda txn: txn.amount, txns)), 2)
+
+# Returns a list of money flows that affect the specified bucket
+def flows_in_bucket(flows, bucket):
+    if isinstance(flows, dict):
+        flows = flows.values()
+    return [flow for flow in flows if flow.bucket == bucket]
+
+# Returns a list of flows that are on the start date, end date, and every date in between
+def flows_between_dates(flows, datestart, dateend):
+    if isinstance(flows, dict):
+        flows = flows.values()
+    return [flow for flow in flows if flow.date >= datestart and flow.date <= dateend]
+
+# Returns a sum of the amount of all money flows in the list/dictionary:
+def flow_amount_sum(flows):
+    if isinstance(flows, dict):
+        flows = flows.values()
+    return round(sum(map(lambda flow: flow.amount, flows)), 2)
+
+
+
+# Describes a data file.  Contains a list of accounts, a list of
+# buckets, the cash flow start date (as a datetime.date object), a
+# list of initial bucket balances, the list of transactions and the
+# list of money flows (aka bucket transfers).
+class BasicInfo:
+    def __init__(self, accounts, buckets, cash_flow_start, starting_bucket_balances, transactions, money_flows):
+        self.accounts = accounts
+        self.buckets = buckets
+        self.cash_flow_start = cash_flow_start
+        self.starting_bucket_balances = starting_bucket_balances
+        self.transactions = transactions
+        self.money_flows = money_flows
+
+    # Returns the ID of an account given its name.  Returns None if
+    # account with that name was not found.
+    def account_id_from_name(self, account_name):
+        for account in self.accounts.values():
+            if account.name == account_name:
+                return account.key
+        return None
+
+    # Returns true if the account is bucketed (IE included in cash
+    # flow comparison), or false if the account is not.  'account'
+    # should be the account primary key (small integer account
+    # number).
+    def is_account_bucketed(self, account):
+        return self.accounts[account].bucketed
+
+    # Return a list of the primary keys of all bucketed accounts
+    def bucketed_accounts(self):
+        return [account for account in self.accounts.keys() if self.is_account_bucketed(account)]
+
+    # Returns the balance of the account at the end of the specified
+    # date (or as of all transactions in the register if date was not
+    # specified).  'account' is the account's primary key (a small
+    # integer), and date must be a datetime.date object.
+    def account_balance(self, account, date = None):
+        txns = txns_in_account(proper_txns(self.transactions), account)
+        if date:
+            txns = txns_at_or_before_date(txns, date)
+
+        return txn_amount_sum(txns)
+
+    # Returns a sum of the balances of all specified accounts as of
+    # the specified date (or the current balance if date is not
+    # specified).  'accounts' must be a list of account primary keys
+    # (small integers).  'date' must be a datetime.date object.
+    def total_account_balance(self, accounts, date = datetime.date.max):
+        balances = map(lambda account: self.account_balance(account, date), accounts)
+
+        return round(sum(balances), 2)
+
+    # Returns a sum of the balances of all bucketed accounts as of the
+    # specified date (or the current balance if date is not
+    # specified).  'date' must be a datetime.date object.
+    def total_bucketed_account_balance(self, date = datetime.date.max):
+        return self.total_account_balance(self.bucketed_accounts(), date)
+
+    # Returns the balance of the bucket at the end of the specified
+    # date (or as of all transactions and money flows in the data file
+    # if date was not specified).  'bucket' is the buckets's primary
+    # key (a small integer), and date must be a datetime.date object.
+    def bucket_balance(self, bucket, date = datetime.date.max):
+        # The balance in a bucket includes its starting balance as of
+        # the cash flow start date, transactions with buckets
+        # assigned, and explicit "money flows" which are transfers
+        # between buckets.  Start by getting the starting balance.
+        if bucket in self.starting_bucket_balances:
+            starting_balance = self.starting_bucket_balances[bucket]
+        else:
+            starting_balance = 0
+
+        # Next, calculate the sum of all transactions that are
+        # assigned to this bucket.  Note that we can only consider
+        # transactions that are on or after the cash flow start date.
+        my_txns = txns_between_dates(txns_in_bucket(self.transactions, bucket), self.cash_flow_start, date)
+        txn_balance = txn_amount_sum(my_txns)
+
+        # Finally, calculate the sum of all money flows that affect this bucket:
+        my_flows = flows_between_dates(flows_in_bucket(self.money_flows, bucket), self.cash_flow_start, date)
+        flow_balance = flow_amount_sum(my_flows)
+
+        return round(starting_balance + txn_balance + flow_balance, 2);
+
+    def total_bucket_balance(self, date = datetime.date.max):
+        balances = map(lambda bucket: self.bucket_balance(bucket, date), self.buckets.keys())
+
+        return round(sum(balances), 2)
+
+    # Check that the sum of the bucket starting balances matches the
+    # balance of the listed accounts on the cash flow start date.  If
+    # no accounts are specified, this will use the accounts that are
+    # 'bucketed'.
+    def check_cash_flow_start(self, accounts_to_include = None):
+        if accounts_to_include == None:
+            accounts_to_include = self.bucketed_accounts()
+
+        bucket_balance_total = round(sum(self.starting_bucket_balances.values()), 2)
+
+        account_balances = map(lambda account: (account, self.account_balance(account, self.cash_flow_start)), accounts_to_include)
+
+        account_balance_total = round(sum(map(lambda ab: ab[1], account_balances)), 2)
+
+        if account_balance_total == bucket_balance_total:
+            print 'Cash flow start check: good (%.2f == %.2f)' % (bucket_balance_total, account_balance_total)
+        else:
+            print '  ***'
+            if account_balance_total > bucket_balance_total:
+                print '  *** ERROR: accounts exceed bucket balance at cash flow start date by %.2f' % (account_balance_total - bucket_balance_total)
+            else:
+                print '  *** ERROR: buckets exceed account balance at cash flow start date by %.2f' % (bucket_balance_total - account_balance_total)
+            print '  ***'
+            print '  *** Cash flow start date: %s' % (self.cash_flow_start.isoformat())
+            print '  *** Sum of bucket balances at cash flow start: %.2f' % (bucket_balance_total)
+            print '  *** Sum of account balances at cash flow start: %.2f' % (account_balance_total)
+            print '  ***'
+            print '  *** Account balances on cash flow start date:'
+            for account_balance in account_balances:
+                account = account_balance[0]
+                balance = account_balance[1]
+                print '  ***   %d: %.2f (%s)' % (account, balance, self.accounts[account].name)
 
 # Class to interface to a MoneyWell data file.  Provides methods for
 # reading information from the data file.
@@ -213,17 +387,6 @@ class DataFile:
 
         return bucket_balances
 
-    def get_basic_info(self):
-        accounts = self.get_accounts()
-        buckets = self.get_buckets()
-        cfsd = self.get_cash_flow_start_date()
-        sbb = self.get_starting_bucket_balances(buckets)
-
-        return BasicInfo(accounts=accounts,
-                         buckets=buckets,
-                         cash_flow_start=cfsd,
-                         starting_bucket_balances=sbb )
-
     def get_transactions(self):
         if not self.is_open:
             raise Exception('not open')
@@ -287,106 +450,28 @@ class DataFile:
 
         return flows
 
-def is_account_bucketed(basic_info, account):
-    return basic_info.accounts[account].bucketed
+    def get_basic_info(self):
+        accounts = self.get_accounts()
+        buckets = self.get_buckets()
+        cfsd = self.get_cash_flow_start_date()
+        sbb = self.get_starting_bucket_balances(buckets)
+        transactions = self.get_transactions()
+        flows = self.get_money_flows()
 
-# Filter out the split children transactions - they are not useful for computing the balance of an account.
-def proper_txns(txns):
-    if isinstance(txns, dict):
-        txns = txns.values()
-    return [txn for txn in txns if txn.split_parent is None]
+        return BasicInfo(accounts = accounts,
+                         buckets = buckets,
+                         cash_flow_start = cfsd,
+                         starting_bucket_balances = sbb,
+                         transactions = transactions,
+                         money_flows = flows)
 
-def txns_in_account(txns, account):
-    if isinstance(txns, dict):
-        txns = txns.values()
-    return [txn for txn in txns if txn.account == account]
-
-def txns_in_bucket(txns, bucket):
-    if isinstance(txns, dict):
-        txns = txns.values()
-    return [txn for txn in txns if txn.bucket == bucket]
-
-def txns_at_or_before_date(txns, date):
-    if isinstance(txns, dict):
-        txns = txns.values()
-    return [txn for txn in txns if txn.date <= date]
-
-# Returns transactions that are on the start date, end date, and every date in between
-def txns_between_dates(txns, datestart, dateend):
-    if isinstance(txns, dict):
-        txns = txns.values()
-    return [txn for txn in txns if txn.date >= datestart and txn.date <= dateend]
-
-def flows_in_bucket(flows, bucket):
-    if isinstance(flows, dict):
-        flows = flows.values()
-    return [flow for flow in flows if flow.bucket == bucket]
-
-# Returns flows that are on the start date, end date, and every date in between
-def flows_between_dates(flows, datestart, dateend):
-    if isinstance(flows, dict):
-        flows = flows.values()
-    return [flow for flow in flows if flow.date >= datestart and flow.date <= dateend]
-
-def account_balance_on_date(txns, account, date):
-    return round(sum(map(lambda txn: txn.amount, txns_at_or_before_date(txns_in_account(proper_txns(txns), account), date))), 2)
-
-# Return a list of the ID's of all bucketed accounts
-def bucketed_accounts(basic_info):
-    return [account for account in basic_info.accounts.keys() if basic_info.accounts[account].bucketed]
-
-# Check that the sum of the bucket starting balances matches the
-# balance of the listed accounts on the cash flow start date.  If no
-# accounts are specified, this will use the accounts that are
-# 'bucketed'.
-def check_cash_flow_start(basic_info, txns, accounts_to_include = None):
-    if accounts_to_include == None:
-        accounts_to_include = bucketed_accounts(basic_info)
-
-    bucket_balance_total = round(sum(map(lambda sbb: sbb[1], basic_info.starting_bucket_balances)), 2)
-
-    account_balances = map(lambda account: (account, account_balance_on_date(txns, account, basic_info.cash_flow_start)), accounts_to_include)
-
-    account_balance_total = round(sum(map(lambda ab: ab[1], account_balances)), 2)
-
-    if account_balance_total == bucket_balance_total:
-        print 'Cash flow start check: good (%.2f == %.2f)' % (bucket_balance_total, account_balance_total)
-    else:
-        print '  ***'
-        if account_balance_total > bucket_balance_total:
-            print '  *** ERROR: accounts exceed bucket balance at cash flow start date by %.2f' % (account_balance_total - bucket_balance_total)
-        else:
-            print '  *** ERROR: buckets exceed account balance at cash flow start date by %.2f' % (bucket_balance_total - account_balance_total)
-        print '  ***'
-        print '  *** Cash flow start date: %s' % (basic_info.cash_flow_start.isoformat())
-        print '  *** Sum of bucket balances at cash flow start: %.2f' % (bucket_balance_total)
-        print '  *** Sum of account balances at cash flow start: %.2f' % (account_balance_total)
-        print '  ***'
-        print '  *** Account balances on cash flow start date:'
-        for account_balance in account_balances:
-            account = account_balance[0]
-            balance = account_balance[1]
-            print '  ***   %d: %.2f (%s)' % (account, balance, basic_info.accounts[account].name)
-
-def bucket_balance_on_date(basic_info, txns, flows, bucket, date):
-    my_txns = txns_between_dates(txns_in_bucket(txns, bucket), basic_info.cash_flow_start, date)
-    txn_balance = round(sum(map(lambda txn: txn.amount, my_txns)), 2)
-
-    my_flows = flows_between_dates(flows_in_bucket(flows, bucket), basic_info.cash_flow_start, date)
-    flow_balance = round(sum(map(lambda flow: flow.amount, my_flows)), 2)
-
-    if bucket in basic_info.starting_bucket_balances:
-        starting_balance = basic_info.starting_bucket_balances[bucket]
-    else:
-        starting_balance = 0
-
-    return round(txn_balance + flow_balance + starting_balance, 2);
+def read_in_basic_info(filename):
+    df = DataFile(filename)
+    df.open()
+    return df.get_basic_info()
 
 if __name__ == '__main__':
-    df = DataFile('testdata/matt_play_copy.moneywell')
-    df.open()
-
-    info = df.get_basic_info()
+    info = read_in_basic_info('testdata/matt_play_copy.moneywell')
 
     print ''
     print 'Accounts:'
@@ -400,17 +485,25 @@ if __name__ == '__main__':
 
     print ''
     print 'Starting bucket balances:'
-    for sbb in info.starting_bucket_balances:
-        print 'bucket %d: %f' % (sbb[0].key, sbb[1])
+    for bucket in info.starting_bucket_balances.keys():
+        print 'bucket %d: %.2f' % (bucket, info.starting_bucket_balances[bucket])
 
     print ''
     print 'Cash flow start date: %s' % (info.cash_flow_start.isoformat())
 
-    txns = df.get_transactions()
     print ''
-    print 'Found %d transactions' % (len(txns))
+    print 'Found %d transactions' % (len(info.transactions))
 
-    flows = df.get_money_flows()
     print ''
-    print 'Found %d money flows' % (len(flows))
+    print 'Found %d money flows' % (len(info.money_flows))
+
+    # In our moneywell data file, it turns out that we have two
+    # accounts as bucketed now, but on the "cash flow start date",
+    # only one account was considered bucketed at that time.  The data
+    # file does not contain this information.
+    cash_flow_start_account_names = ['Main Checking']
+    cash_flow_start_accounts = map(info.account_id_from_name, cash_flow_start_account_names)
+
+    print ''
+    info.check_cash_flow_start(cash_flow_start_accounts)
 
