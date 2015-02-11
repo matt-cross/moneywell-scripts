@@ -309,6 +309,30 @@ class BasicInfo:
                 balance = account_balance[1]
                 print '  ***   %d: %.2f (%s)' % (account, balance, self.accounts[account].name)
 
+    # Check the sum of bucket balances versus the sum of account
+    # balances as of the specified date (or now if date is not
+    # specified).  Print out a report of the results.
+    def check_bucket_balances(self, date = datetime.date.max):
+        account_sum = self.total_bucketed_account_balance(date)
+        bucket_sum = self.total_bucket_balance(date)
+
+        if date == datetime.date.max:
+            datestr = ''
+        else:
+            datestr = ' [as of %s]' % (date.isoformat())
+
+        if account_sum == bucket_sum:
+            print 'Bucket vs. account check: good (%.2f == %.2f)%s' % (account_sum, bucket_sum, datestr)
+            return True
+        else:
+            if account_sum > bucket_sum:
+                print '  *** ERROR: accounts exceed bucket balance by %.2f (accounts: %.2f, buckets %.2f)%s' % \
+                    (account_sum - bucket_sum, account_sum, bucket_sum, datestr)
+            else:
+                print '  *** ERROR: bucket balance exceeds accounts by %.2f (accounts: %.2f, buckets %.2f)%s' % \
+                    (bucket_sum - account_sum, account_sum, bucket_sum, datestr)
+            return False
+
 # Class to interface to a MoneyWell data file.  Provides methods for
 # reading information from the data file.
 class DataFile:
@@ -473,20 +497,23 @@ def read_in_basic_info(filename):
 if __name__ == '__main__':
     info = read_in_basic_info('testdata/matt_play_copy.moneywell')
 
-    print ''
-    print 'Accounts:'
-    for acct in info.accounts.values():
-        print acct
+    verbose = 0
 
-    print ''
-    print 'Buckets:'
-    for bucket in info.buckets.values():
-        print bucket
+    if verbose:
+        print ''
+        print 'Accounts:'
+        for acct in info.accounts.values():
+            print acct
 
-    print ''
-    print 'Starting bucket balances:'
-    for bucket in info.starting_bucket_balances.keys():
-        print 'bucket %d: %.2f' % (bucket, info.starting_bucket_balances[bucket])
+        print ''
+        print 'Buckets:'
+        for bucket in info.buckets.values():
+            print bucket
+
+        print ''
+        print 'Starting bucket balances:'
+        for bucket in info.starting_bucket_balances.keys():
+            print 'bucket %d: %.2f' % (bucket, info.starting_bucket_balances[bucket])
 
     print ''
     print 'Cash flow start date: %s' % (info.cash_flow_start.isoformat())
@@ -507,3 +534,5 @@ if __name__ == '__main__':
     print ''
     info.check_cash_flow_start(cash_flow_start_accounts)
 
+    print ''
+    info.check_bucket_balances()
