@@ -359,6 +359,18 @@ class BasicInfo:
         sibling = self.transactions[txn.transfer_sibling]
         return is_account_bucketed(sibling.account)
 
+
+    # The following methods are designed to catch entry errors that
+    # would lead to the sum of bucket balances not equaling account
+    # balances.  They all return a sum of the errors they found.  The
+    # sign of the error will be as if the expected expression is
+    # "account_balances - bucket_balances = error".  So if there is
+    # one credit (positive) transaction in a bucketed account that
+    # does not have a bucket assigned, the error will be positive.
+    # However, if that same transaction were bucketed but in an
+    # unbucketed account, the error would be negative.
+
+
     # Print out a list of all transactions in bucketed accounts that
     # don't have buckets assigned.
     def check_for_unbucketed_txns_in_bucketed_accounts(self):
@@ -437,10 +449,53 @@ class BasicInfo:
                     print '  *** %s' % (txn)
                 print '  ***'
 
+        # See the above note about the sign of errors reported by this method
+        error_sum = -error_sum
+
         if error_sum:
             print '  *** Sum of unbucketed transactions in bucketed accounts: %.2f' % (error_sum)
 
         return error_sum
+
+    # Check that all splits have split children that add up to the split parent.
+    def check_splits(self):
+        error_sum = 0.0
+        error_sum_bucketed = 0.0
+        error_count = 0
+
+        for txn_key in self.splits:
+            parent = self.transactions[txn_key]
+            children = [txn for txn in self.transactions.values() if txn.split_parent == txn_key]
+
+            error = parent.amount - txn_amount_sum(children)
+
+            if abs(error) >= 0.01:
+                print '  ***'
+                print '  *** Incomplete split transation (unsplit amount is %.2f):' % (error)
+                print '  ***   Parent:'
+                print '  ***     %s' % (parent)
+                print '  ***'
+                print '  ***   Children:'
+                for child in children:
+                    print '  ***     %s' % (child)
+                print '  ***'
+                error_count += 1
+                error_sum += error
+                if self.is_account_bucketed(parent.account):
+                    error_sum_bucketed += error
+
+        if error_count:
+            print '  *** Found %d split transactions with errors' % (error_count)
+        if error_sum:
+            print '  *** Total of errors: %.2f' % (error_sum)
+        if error_sum_bucketed:
+            print '  *** Total of errors in bucketed accounts: %.2f' % (error_sum_bucketed)
+
+        # We return the error only as it applies to bucketed accounts.
+        # Any unsplit portion in an unbucketed account does not affect
+        # bucket/account mismatches.
+
+        return error_sum_bucketed
 
 # Class to interface to a MoneyWell data file.  Provides methods for
 # reading information from the data file.
@@ -653,6 +708,9 @@ if __name__ == '__main__':
 
     print ''
     error_sum += info.check_for_unbucketed_txns_in_bucketed_accounts()
+
+    print ''
+    error_sum += info.check_splits();
 
     if error_sum:
         print ''
