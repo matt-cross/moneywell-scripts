@@ -77,6 +77,10 @@ class Transaction:
         self.memo = memo
         self.amount = amount
 
+    # A method to get the date, useful for sorting transactions by date.
+    def get_date(self):
+        return self.date
+
     def __repr__(self):
         if self.bucket is not None:
             bucket = str(self.bucket)
@@ -199,6 +203,19 @@ class BasicInfo:
         self.starting_bucket_balances = starting_bucket_balances
         self.transactions = transactions
         self.money_flows = money_flows
+
+        # Create a set containing the keys of all split transactions.
+        # The only way to find this out is to look for transactions
+        # that have a "split_parent".
+        split_children = [txn for txn in transactions.values() if txn.split_parent]
+        self.splits = set(map(lambda txn: txn.split_parent, split_children))
+
+    # Check if a transaction is a split.  'transaction' may be either the
+    # primary key of a transaction or a Transaction object.
+    def is_txn_split(self, transaction):
+        if isinstance(transaction, Transaction):
+            transaction = transaction.key
+        return transaction in self.splits
 
     # Returns the ID of an account given its name.  Returns None if
     # account with that name was not found.
@@ -332,6 +349,98 @@ class BasicInfo:
                 print '  *** ERROR: bucket balance exceeds accounts by %.2f (accounts: %.2f, buckets %.2f)%s' % \
                     (bucket_sum - account_sum, account_sum, bucket_sum, datestr)
             return False
+
+    # Return true if this transaction is a transfer and the other side
+    # of the transaction is going into (or out of) a bucketed account.
+    def is_txn_xfer_sibling_bucketed(self, txn):
+        if txn.transfer_sibling not in self.transactions:
+            return False # Not a transfer or missing sibling
+
+        sibling = self.transactions[txn.transfer_sibling]
+        return is_account_bucketed(sibling.account)
+
+    # Print out a list of all transactions in bucketed accounts that
+    # don't have buckets assigned.
+    def check_for_unbucketed_txns_in_bucketed_accounts(self):
+        error_sum = 0.0
+
+        for account in self.bucketed_accounts():
+            # Start with a list of all transactions in this account starting on the cash flow start date
+            txns = txns_in_account(self.transactions, account)
+            txns = txns_between_dates(txns, self.cash_flow_start, datetime.date.max)
+
+            # Exclude any split parent transactions
+            txns = [txn for txn in txns if not self.is_txn_split(txn)]
+
+            # Exclude any transfers
+            txns = [txn for txn in txns if not txn.transfer_sibling]
+
+            # Filter out all transactions that have a bucket assigned
+            txns = [txn for txn in txns if txn.bucket == None]
+
+            # Filter out transactions with an amount of 0 (since these won't impact balances anyway)
+            txns = [txn for txn in txns if txn.amount]
+
+            # Sort them by date
+            txns.sort(key = Transaction.get_date)
+
+            if txns:
+                error_this_account = txn_amount_sum(txns)
+                error_sum += error_this_account
+                print '  ***'
+                print '  *** Bucketed account %d (%s) has %d transactions without buckets totalling %.2f:' % \
+                    (account, self.accounts[account].name, len(txns), error_this_account)
+                for txn in txns:
+                    print '  *** %s' % (txn)
+                print '  ***'
+
+        if error_sum:
+            print '  *** Sum of unbucketed transactions in bucketed accounts: %.2f' % (error_sum)
+
+        return error_sum
+
+    # Print out a list of all transactions in unbucketed accounts that
+    # have buckets assigned.
+    def check_for_bucketed_txns_in_unbucketed_accounts(self):
+        error_sum = 0.0
+
+        for account in self.accounts.keys():
+            if self.is_account_bucketed(account):
+                continue
+
+            # Start with a list of all transactions in this account starting on the cash flow start date
+            txns = txns_in_account(self.transactions, account)
+            txns = txns_between_dates(txns, self.cash_flow_start, datetime.date.max)
+
+            # Exclude any split parent transactions
+            txns = [txn for txn in txns if not self.is_txn_split(txn)]
+
+            # Exclude any transfers
+            txns = [txn for txn in txns if not txn.transfer_sibling]
+
+            # Filter out all transactions that do not have a bucket assigned
+            txns = [txn for txn in txns if txn.bucket != None]
+
+            # Filter out transactions with an amount of 0 (since these won't impact balances anyway)
+            txns = [txn for txn in txns if txn.amount]
+
+            # Sort them by date
+            txns.sort(key = Transaction.get_date)
+
+            if txns:
+                error_this_account = txn_amount_sum(txns)
+                error_sum += error_this_account
+                print '  ***'
+                print '  *** Unbucketed account %d (%s) has %d transactions with buckets totalling %.2f:' % \
+                    (account, self.accounts[account].name, len(txns), error_this_account)
+                for txn in txns:
+                    print '  *** %s' % (txn)
+                print '  ***'
+
+        if error_sum:
+            print '  *** Sum of unbucketed transactions in bucketed accounts: %.2f' % (error_sum)
+
+        return error_sum
 
 # Class to interface to a MoneyWell data file.  Provides methods for
 # reading information from the data file.
@@ -536,3 +645,15 @@ if __name__ == '__main__':
 
     print ''
     info.check_bucket_balances()
+
+    error_sum = 0.0
+
+    print ''
+    error_sum += info.check_for_bucketed_txns_in_unbucketed_accounts()
+
+    print ''
+    error_sum += info.check_for_unbucketed_txns_in_bucketed_accounts()
+
+    if error_sum:
+        print ''
+        print '  *** Sum of discovered errors: %.2f' % (error_sum)
