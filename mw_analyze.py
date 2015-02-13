@@ -191,6 +191,19 @@ def flow_amount_sum(flows):
 
 
 
+# A simple date range class
+class DateRange:
+    def __init__(self, datestart, dateend):
+        self.datestart = datestart
+        self.dateend = dateend
+
+    def includes_date(self, date):
+        return self.datestart <= date and date <= self.dateend
+
+    def __repr__(self):
+        return '%s to %s' % (self.datestart.isoformat(), self.dateend.isoformat())
+
+
 # Describes a data file.  Contains a list of accounts, a list of
 # buckets, the cash flow start date (as a datetime.date object), a
 # list of initial bucket balances, the list of transactions and the
@@ -209,6 +222,26 @@ class BasicInfo:
         # that have a "split_parent".
         split_children = [txn for txn in transactions.values() if txn.split_parent]
         self.splits = set(map(lambda txn: txn.split_parent, split_children))
+
+        # Some accounts are bucketed for some of the history and not
+        # for other parts.  It's OK for accounts to transition between
+        # bucketed and unbucketed when their balances are 0.  This is
+        # a dictionary of accounts that are like this: the key is the
+        # account's key, and the value is a list of DateRange's where
+        # the account was bucketed.
+        self.semi_bucketed_accounts = {}
+
+    def add_account_bucketed_daterange(self, account, date_range):
+        if account in self.semi_bucketed_accounts:
+            self.semi_bucketed_accounts[account].append(date_range)
+        else:
+            self.semi_bucketed_accounts[account] = [date_range]
+
+    def print_sometimes_bucketed_accounts(self):
+        if len(self.semi_bucketed_accounts.keys()):
+            print 'List of accounts that are sometimes bucketed:'
+            for account in self.semi_bucketed_accounts.keys():
+                print '  account %2d (%25s) is bucketed in date ranges: %s' % (account, self.accounts[account].name, self.semi_bucketed_accounts[account])
 
     # Check if a transaction is a split.  'transaction' may be either the
     # primary key of a transaction or a Transaction object.
@@ -229,16 +262,35 @@ class BasicInfo:
     # flow comparison), or false if the account is not.  'account'
     # should be the account primary key (small integer account
     # number).
-    def is_account_bucketed(self, account):
-        return self.accounts[account].bucketed
+    def is_account_bucketed(self, account, date):
+        if account in self.semi_bucketed_accounts:
+            # Semi-bucketed accounts override the information in the data file.
+            for date_range in self.semi_bucketed_accounts[account]:
+                if date_range.includes_date(date):
+                    return True
+            return False
+        else:
+            return self.accounts[account].bucketed
 
-    # Return a list of the primary keys of all bucketed accounts
-    def bucketed_accounts(self):
-        return [account for account in self.accounts.keys() if self.is_account_bucketed(account)]
+    # Return a list of the primary keys of all permanently bucketed accounts
+    def permanently_bucketed_accounts(self):
+        return [account for account in self.accounts.keys() if self.accounts[account].bucketed and account not in self.semi_bucketed_accounts]
 
-    # Return a list of the primary keys of all unbucketed accounts
-    def unbucketed_accounts(self):
-        return [account for account in self.accounts.keys() if not self.is_account_bucketed(account)]
+    # Return a list of the primary keys of all permanently unbucketed accounts
+    def permanently_unbucketed_accounts(self):
+        return [account for account in self.accounts.keys() if not self.accounts[account].bucketed and account not in self.semi_bucketed_accounts]
+
+    # Return a list of the primary keys of all accounts that are sometimes bucketed
+    def sometimes_bucketed_accounts(self):
+        return self.semi_bucketed_accounts.keys()
+
+    # Return a list of the primary keys of accounts that are bucketed on the specified date
+    def bucketed_accounts(self, date):
+        return [account for account in self.accounts.keys() if self.is_account_bucketed(account, date)]
+
+    # Return a list of the primary keys of accounts that are unbucketed on the specified date
+    def unbucketed_accounts(self, date):
+        return [account for account in self.accounts.keys() if not self.is_account_bucketed(account, date)]
 
     # Returns the balance of the account at the end of the specified
     # date (or as of all transactions in the register if date was not
@@ -264,7 +316,7 @@ class BasicInfo:
     # specified date (or the current balance if date is not
     # specified).  'date' must be a datetime.date object.
     def total_bucketed_account_balance(self, date = datetime.date.max):
-        return self.total_account_balance(self.bucketed_accounts(), date)
+        return self.total_account_balance(self.bucketed_accounts(date), date)
 
     # Returns the balance of the bucket at the end of the specified
     # date (or as of all transactions and money flows in the data file
@@ -303,7 +355,7 @@ class BasicInfo:
     # 'bucketed'.
     def check_cash_flow_start(self, accounts_to_include = None):
         if accounts_to_include == None:
-            accounts_to_include = self.bucketed_accounts()
+            accounts_to_include = self.bucketed_accounts(self.cash_flow_start)
 
         bucket_balance_total = round(sum(self.starting_bucket_balances.values()), 2)
 
@@ -329,6 +381,8 @@ class BasicInfo:
                 account = account_balance[0]
                 balance = account_balance[1]
                 print '  ***   %d: %.2f (%s)' % (account, balance, self.accounts[account].name)
+
+        return account_balance_total - bucket_balance_total
 
     # Check the sum of bucket balances versus the sum of account
     # balances as of the specified date (or now if date is not
@@ -361,7 +415,7 @@ class BasicInfo:
             return False # Not a transfer or missing sibling
 
         sibling = self.transactions[txn.transfer_sibling]
-        return self.is_account_bucketed(sibling.account)
+        return self.is_account_bucketed(sibling.account, txn.date)
 
 
     # Given a transaction return its transfer sibling.
@@ -387,10 +441,14 @@ class BasicInfo:
     def check_for_unbucketed_txns_in_bucketed_accounts(self):
         error_sum = 0.0
 
-        for account in self.bucketed_accounts():
+        for account in set(self.permanently_bucketed_accounts()) | set(self.sometimes_bucketed_accounts()):
             # Start with a list of all transactions in this account starting on the cash flow start date
             txns = txns_in_account(self.transactions, account)
             txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+
+            if account in self.sometimes_bucketed_accounts():
+                # Only include transactions during the time(s) the account was bucketed
+                txns = [txn for txn in txns if self.is_account_bucketed(account, txn.date)]
 
             # Exclude any split parent transactions
             txns = [txn for txn in txns if not self.is_txn_split(txn)]
@@ -429,11 +487,15 @@ class BasicInfo:
     def check_for_bucketed_txns_in_unbucketed_accounts(self):
         error_sum = 0.0
 
-        for account in self.unbucketed_accounts():
+        for account in set(self.permanently_unbucketed_accounts()) | set(self.sometimes_bucketed_accounts()):
 
             # Start with a list of all transactions in this account starting on the cash flow start date
             txns = txns_in_account(self.transactions, account)
             txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+
+            if account in self.sometimes_bucketed_accounts():
+                # Only include transactions during the time(s) the account was unbucketed
+                txns = [txn for txn in txns if not self.is_account_bucketed(account, txn.date)]
 
             # Exclude any split parent transactions
             txns = [txn for txn in txns if not self.is_txn_split(txn)]
@@ -494,7 +556,7 @@ class BasicInfo:
                 print '  ***'
                 error_count += 1
                 error_sum += error
-                if self.is_account_bucketed(parent.account) and parent.date > self.cash_flow_start:
+                if self.is_account_bucketed(parent.account, parent.date) and parent.date > self.cash_flow_start:
                     error_sum_bucketed += error
 
         if error_count:
@@ -519,10 +581,15 @@ class BasicInfo:
     def check_bucketed_account_transfers(self):
         error_sum = 0.0
 
-        for account in self.bucketed_accounts():
+        for account in set(self.permanently_bucketed_accounts()) | set(self.sometimes_bucketed_accounts()):
             # Get a list of all transfers in this account (after the cash flow start date)
             txns = txns_in_account(self.transactions, account)
             txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+
+            if account in self.sometimes_bucketed_accounts():
+                # Only include transactions during the time(s) the account was bucketed
+                txns = [txn for txn in txns if self.is_account_bucketed(account, txn.date)]
+                
             xfers = [txn for txn in txns if txn.transfer_sibling]
 
             # Split them into the ones going to bucketed and unbucketed accounts
@@ -578,11 +645,16 @@ class BasicInfo:
     def check_unbucketed_account_transfers(self):
         error_sum = 0.0
 
-        for account in self.unbucketed_accounts():
+        for account in set(self.permanently_unbucketed_accounts()) | set(self.sometimes_bucketed_accounts()):
 
             # Get a list of all transfers in this account (after the cash flow start date)
             txns = txns_in_account(self.transactions, account)
             txns = txns_between_dates(txns, self.cash_flow_start + datetime.timedelta(days=1), datetime.date.max)
+
+            if account in self.sometimes_bucketed_accounts():
+                # Only include transactions during the time(s) the account was unbucketed
+                txns = [txn for txn in txns if not self.is_account_bucketed(account, txn.date)]
+
             xfers = [txn for txn in txns if txn.transfer_sibling]
 
             # Get a list of all transfers that have buckets assigned (they shouldn't):
@@ -774,6 +846,14 @@ def read_in_basic_info(filename):
     df.open()
     return df.get_basic_info()
 
+# Setup for our specific moneywell file:
+def cross_setup(info):
+    # Some of our accounts were only bucketed for some of the history range:
+    info.add_account_bucketed_daterange(info.account_id_from_name('DCU Visa Gold'),
+                                        DateRange(datetime.date(2012,9,29), datetime.date(2013,6,12)) )
+    info.add_account_bucketed_daterange(info.account_id_from_name("The Children's Place CC"),
+                                        DateRange(datetime.date(2012,9,29), datetime.date(2013,6,1)) )
+
 if __name__ == '__main__':
     info = read_in_basic_info('testdata/matt_play_copy.moneywell')
 
@@ -821,25 +901,20 @@ if __name__ == '__main__':
     print ''
     print 'Found %d money flows' % (len(info.money_flows))
 
-    if False:
-        # In our moneywell data file, it turns out that we have two
-        # accounts as bucketed now, but on the "cash flow start date",
-        # only one account was considered bucketed at that time.  The
-        # data file does not contain this information.
-        cash_flow_start_account_names = ['Main Checking']
-        cash_flow_start_accounts = map(info.account_id_from_name, cash_flow_start_account_names)
-    else:
-        cash_flow_start_accounts = info.bucketed_accounts()
+    cross_setup(info)
 
     print ''
-    print 'Checking cash flow start:'
-    info.check_cash_flow_start(cash_flow_start_accounts)
+    info.print_sometimes_bucketed_accounts()
 
     print ''
     print 'Checking bucket balances against bucketed account balances:'
     info.check_bucket_balances()
 
     error_sum = 0.0
+
+    print ''
+    print 'Checking cash flow start:'
+    error_sum += info.check_cash_flow_start()
 
     print ''
     print 'Checking for bucketed transactions in unbucketed accounts:'
@@ -864,6 +939,5 @@ if __name__ == '__main__':
     print ''
     print 'Done.'
 
-    if error_sum:
-        print ''
-        print '  *** Sum of discovered errors: %.2f' % (error_sum)
+    print ''
+    print '  *** Sum of discovered errors: %.2f' % (error_sum)
