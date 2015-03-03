@@ -544,7 +544,7 @@ class BasicInfo:
 
             error = parent.amount - txn_amount_sum(children)
 
-            if abs(error) >= 0.01:
+            if abs(error) >= 0.005:
                 print '  ***'
                 print '  *** Incomplete split transation (unsplit amount is %.2f):' % (error)
                 print '  ***   Parent:'
