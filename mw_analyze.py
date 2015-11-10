@@ -30,9 +30,10 @@
 ## Split transactions that don't add up or have split amounts that do
 ## not have buckets assigned (in bucketed accounts).
 
-import sqlite3
+import argparse
 import datetime
 import os
+import sqlite3
 
 # Describes an account
 class Account:
@@ -335,11 +336,11 @@ class BasicInfo:
         # Next, calculate the sum of all transactions that are
         # assigned to this bucket.  Note that we can only consider
         # transactions that are on or after the cash flow start date.
-        my_txns = txns_between_dates(txns_in_bucket(self.transactions, bucket), self.cash_flow_start + datetime.timedelta(days=1), date)
+        my_txns = txns_between_dates(txns_in_bucket(self.transactions, bucket), self.cash_flow_start, date)
         txn_balance = txn_amount_sum(my_txns)
 
         # Finally, calculate the sum of all money flows that affect this bucket:
-        my_flows = flows_between_dates(flows_in_bucket(self.money_flows, bucket), self.cash_flow_start + datetime.timedelta(days=1), date)
+        my_flows = flows_between_dates(flows_in_bucket(self.money_flows, bucket), self.cash_flow_start, date)
         flow_balance = flow_amount_sum(my_flows)
 
         return round(starting_balance + txn_balance + flow_balance, 2);
@@ -359,7 +360,8 @@ class BasicInfo:
 
         bucket_balance_total = round(sum(self.starting_bucket_balances.values()), 2)
 
-        account_balances = map(lambda account: (account, self.account_balance(account, self.cash_flow_start)), accounts_to_include)
+        account_balances = map(lambda account: (account, self.account_balance(account, self.cash_flow_start - datetime.timedelta(days=1))),
+                               accounts_to_include)
 
         account_balance_total = round(sum(map(lambda ab: ab[1], account_balances)), 2)
 
@@ -855,11 +857,19 @@ def cross_setup(info):
                                         DateRange(datetime.date(2012,9,29), datetime.date(2013,6,1)) )
 
 if __name__ == '__main__':
-    info = read_in_basic_info('testdata/matt_play_copy.moneywell')
+    parser = argparse.ArgumentParser(description='Analyze a moneywell document')
+    parser.add_argument('filename', type=str, default='testdata/matt_play_copy.moneywell',
+                        help='Filename to analyze')
+    parser.add_argument('--verbose', '-v', default=False, const=True, action='store_const',
+                        help='Increase verbosity of output')
+    parser.add_argument('--cross-setup-disable', default=True, const=False, action='store_const',
+                        help="Disable the special setup for the Cross's document")
 
-    verbose = 1
+    args = parser.parse_args()
 
-    if verbose:
+    info = read_in_basic_info(args.filename)
+
+    if args.verbose:
         print ''
         print 'Accounts:'
         max_account_name_length = max([len(account.name) for account in info.accounts.values()])
@@ -901,7 +911,8 @@ if __name__ == '__main__':
     print ''
     print 'Found %d money flows' % (len(info.money_flows))
 
-    cross_setup(info)
+    if not args.cross_setup_disable:
+        cross_setup(info)
 
     print ''
     info.print_sometimes_bucketed_accounts()
