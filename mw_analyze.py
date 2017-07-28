@@ -602,8 +602,11 @@ class BasicInfo:
             xfers_to_bucketed = [txn for txn in xfers_to_bucketed if txn.bucket]
             xfers_to_bucketed.sort(key = Transaction.get_date)
 
+            # NOTE: all split transactions in bucketed accounts should be considered as bucketed here as their children
+            # have been checked as bucketed.
+
             # Get a list of all transfers to unbucketed accounts that don't have buckets assigned (they should):
-            xfers_to_unbucketed = [txn for txn in xfers_to_unbucketed if not txn.bucket]
+            xfers_to_unbucketed = [txn for txn in xfers_to_unbucketed if not (txn.bucket or self.is_txn_split(txn))]
             xfers_to_unbucketed.sort(key = Transaction.get_date)
 
             if xfers_to_bucketed:
