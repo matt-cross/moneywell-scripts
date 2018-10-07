@@ -542,6 +542,10 @@ class BasicInfo:
 
         for txn_key in self.splits:
             parent = self.transactions[txn_key]
+            if parent.date < self.cash_flow_start:
+                # We don't need to check splits before the cash flow
+                # start date - they do not affect bucket balances.
+                continue
             children = [txn for txn in self.transactions.values() if txn.split_parent == txn_key]
 
             error = parent.amount - txn_amount_sum(children)
@@ -764,7 +768,10 @@ class DataFile:
             bucket = row[0]
             balance = row[1]
 
-            bucket_balances[bucket] = balance
+            if bucket in bucket_balances:
+                bucket_balances[bucket] += balance
+            else:
+                bucket_balances[bucket] = balance
 
         return bucket_balances
 
